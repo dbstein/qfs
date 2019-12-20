@@ -4,7 +4,6 @@ import scipy.signal
 import warnings
 import shapely.geometry as shg
 import numexpr as ne
-import finufftpy
 
 import pybie2d
 GSB = pybie2d.boundaries.global_smooth_boundary.global_smooth_boundary.Global_Smooth_Boundary
