@@ -44,12 +44,15 @@ def sign_from_side(interior):
 def get_fbdy_oversampling(bdy, M, MC, FF=0.0, eps=1e-10):
     OF = (M+FF)/MC + 1
     return even_it(bdy.N*OF) if OF > 1 else bdy.N
-def generate_source_boundary(bdy, interior=True, M=4):
+def generate_source_boundary(bdy, interior=True, M=4, fsuf=None):
     sign = -sign_from_side(interior)
     this_M = sign*M
     OS = 1.0
     valid = False
     this_M_orig = this_M
+    if fsuf != None:
+        this_M /= fsuf
+        OS *= fsuf
     while not valid:
         ebdy1 = build_error_estimate(bdy, this_M)
         this_N = even_it(bdy.N*OS)
@@ -74,7 +77,7 @@ class QFS_Boundary(object):
     """
     Container class for Quadrature by Fundamental Solutions
     """
-    def __init__(self, bdy, eps=1e-12, FF=0):
+    def __init__(self, bdy, eps=1e-12, FF=0, forced_source_upsampling_factor=None):
         """
         Initialize QFS object
 
@@ -87,12 +90,13 @@ class QFS_Boundary(object):
         self.raw_M = np.log(self.eps) / (-2*np.pi)
         self.MS = self.raw_M + self.FF
         self.MC = min(M_EPS - self.MS, self.MS)
+        self.forced_source_upsampling_factor = forced_source_upsampling_factor
         # generate the source boundaries
-        sbdy = generate_source_boundary(self.bdy, True, self.MS)
+        sbdy = generate_source_boundary(self.bdy, True, self.MS, forced_source_upsampling_factor)
         self.interior_source_bdy = sbdy[0]
         self.interior_source_N = sbdy[1]
         self.interior_source_M = sbdy[2]
-        sbdy = generate_source_boundary(self.bdy, False, self.MS)
+        sbdy = generate_source_boundary(self.bdy, False, self.MS, forced_source_upsampling_factor)
         self.exterior_source_bdy = sbdy[0]
         self.exterior_source_N = sbdy[1]
         self.exterior_source_M = sbdy[2]
