@@ -33,6 +33,13 @@ def vector_resampling_matrix(n1, n2):
     mat[0*n2:1*n2, 0*n1:1*n1] = rs
     mat[1*n2:2*n2, 1*n1:2*n1] = rs
     return mat
+def pressure_resampling_matrix(n1, n2):
+    rs = resample_matrix(n1, n2)
+    mat = np.zeros([2*n2+1, 2*n1+1], dtype=float)
+    mat[0*n2:1*n2, 0*n1:1*n1] = rs
+    mat[1*n2:2*n2, 1*n1:2*n1] = rs
+    mat[-1, -1] = 1.0
+    return mat
 def polygon_from_boundary(bdy):
     return shg.Polygon(zip(bdy.x, bdy.y))
 def build_error_estimate(bdy, alpha, scaleit=True):
@@ -225,4 +232,96 @@ class QFS_Evaluator(object):
         self.full_mat_inv = np.linalg.inv(self.full_mat)
     def precondition(self, f):
         return self.full_mat_inv.dot(f)
+
+
+class QFS_Evaluator_Pressure(object):
+    def __init__(self, qfs_bdy, interior, b2c_funcs, s2c_func, form_b2c=False):
+        """
+        Generate a function that takes on-surface density(s) --> source effective density
+        Handles the pressure null-space correctly
+
+        interior: whether to construct evaluators for interior points (or exterior)
+        b2c_funcs: list of functions to construct mats used for bdy --> check
+            of the form MAT = bdy_eval(src, trg)
+        s2c_func: function to construct mat for source --> check
+            of the form MAT = source_eval(src, trg)
+        
+        THIS IS AASUMED TO BE FOR A VECTOR PROBLEM
+        DOES NOT SUPPORT ON-SURFACE EVALUTION
+        """
+        self.qfs_bdy = qfs_bdy
+        self.interior = interior
+        self.b2c_funcs = b2c_funcs
+        self.s2c_func = s2c_func
+        self.form_b2c = form_b2c
+
+        self.resample_matrix = vector_resampling_matrix
+        self.resample = vector_resample
+
+        self.bdy, self.fine_bdy, self.source_bdy, self.check_bdy = self.qfs_bdy.get_bdys(self.interior)
+
+        # get bdy --> check mats
+        self.f2c_mats = [func(self.fine_bdy, self.check_bdy) for func in self.b2c_funcs]
+        # form b2c
+        if self.form_b2c:
+            self.b2f_upsampler = self.resample_matrix(self.bdy.N, self.fine_bdy.N)
+            self.b2c_mats = [f2c_mat.dot(self.b2f_upsampler) for f2c_mat in self.f2c_mats]
+
+        # get source --> check mats
+        self.s2c_mat = self.s2c_func(self.source_bdy, self.check_bdy)
+
+        # get the LU decomposition of the source --> check matrix
+        self.b2s_upsampler = pressure_resampling_matrix(self.bdy.N, self.source_bdy.N)
+        self.square_source_mat = self.s2c_mat.dot(self.b2s_upsampler)
+        self.source_lu = sp.linalg.lu_factor(self.square_source_mat)
+
+    def __call__(self, taus):
+        """
+        Given list of densities taus (corresponding to b2c_funcs)
+        Give back the density on the source curve
+        """
+        return self.u2s(self._integrate_to_check(taus))
+
+    def u2s(self, u):
+        """
+        NEEDS TO BE UPGRADE TO (U, p) on check curve...
+
+        get the density on source curve given u on the check curve
+        """
+        w1 = sp.linalg.lu_solve(self.source_lu, u)
+        return self.resample(w1[:-1], self.source_bdy.N)        
+
+    def _integrate_to_check(self, taus):
+        """
+        Given list of densities taus (corresponding to b2c_funcs)
+        Compute integral on check surface
+        This function is for diagonstic purposes
+        """
+        if self.form_b2c:
+            ucs = [mat.dot(tau) for mat, tau in zip(self.b2c_mats, taus)]
+        else:
+            ftaus = [self.resample(tau, self.fine_bdy.N) for tau in taus]
+            ucs = [mat.dot(ftau) for mat, ftau in zip(self.f2c_mats, ftaus)]
+        uc = np.sum(ucs, axis=0)
+        return uc
+
+    def initialize_preconditioner(self, s2b_func=None):
+        """
+        Note that this function is only sensible if all b2c funcs get fed the same thing
+        """
+        self.s2b_func = s2b_func if s2b_func is not None else self.s2c_func
+        self.s2b_mat = self.s2b_func(self.source_bdy, self.bdy)
+        if self.form_b2c:
+            self.b2c_mat = np.sum(self.b2c_mats, axis=0)
+            self.partial_mat = self.b2s_upsampler.dot(sp.linalg.lu_solve(self.source_lu, self.b2c_mat))
+        else:
+            self.f2c_mat = np.sum(self.f2c_mats, axis=0)
+            self.b2f_upsampler = self.resample_matrix(self.bdy.N, self.fine_bdy.N)
+            self.partial_mat = self.b2s_upsampler.dot(sp.linalg.lu_solve(self.source_lu, self.f2c_mat.dot(self.b2f_upsampler)))
+        self.full_mat = self.s2b_mat.dot(self.partial_mat)
+        self.full_mat_inv = np.linalg.inv(self.full_mat)
+    def precondition(self, f):
+        return self.full_mat_inv.dot(f)
+
+
 
