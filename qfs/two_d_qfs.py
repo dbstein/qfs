@@ -159,6 +159,7 @@ class QFS_Evaluator(object):
         self.interior = interior
         self.b2c_funcs = b2c_funcs
         self.s2c_func = s2c_func
+        self.on_surface = on_surface
         self.form_b2c = form_b2c
         self.vector = vector
 
@@ -168,7 +169,7 @@ class QFS_Evaluator(object):
         self.bdy, self.fine_bdy, self.source_bdy, self.check_bdy = self.qfs_bdy.get_bdys(self.interior)
 
         # set things up for on-surface if that's the case
-        if on_surface:
+        if self.on_surface:
             self.fine_bdy = self.bdy
             self.check_bdy = self.bdy
 
@@ -192,14 +193,34 @@ class QFS_Evaluator(object):
         Given list of densities taus (corresponding to b2c_funcs)
         Give back the density on the source curve
         """
-        return self.u2s(self._integrate_to_check(taus))
+        return self.cu2s(self._integrate_to_check(taus))
+
+    def bu2s(self, u):
+        """
+        get the density on source curve given u on the boundary
+        """
+        if not hasattr(self, 'bu2s_lu'):
+            if self.on_surface:
+                self.bu2s_lu = self.source_lu
+            else:
+                mat = self.s2c_func(self.source_bdy, self.bdy)
+                smat = mat.dot(self.b2s_upsampler)
+                self.bu2s_lu = sp.linalg.lu_factor(smat)
+        w1 = sp.linalg.lu_solve(self.bu2s_lu, u)
+        return self.resample(w1, self.source_bdy.N)    
+
+    def cu2s(self, u):
+        """
+        get the density on source curve given u on the check curve
+        """
+        w1 = sp.linalg.lu_solve(self.source_lu, u)
+        return self.resample(w1, self.source_bdy.N)    
 
     def u2s(self, u):
         """
         get the density on source curve given u on the check curve
         """
-        w1 = sp.linalg.lu_solve(self.source_lu, u)
-        return self.resample(w1, self.source_bdy.N)        
+        return self.cu2s(u)
 
     def _integrate_to_check(self, taus):
         """
@@ -246,7 +267,7 @@ class QFS_Evaluator_Pressure(object):
         s2c_func: function to construct mat for source --> check
             of the form MAT = source_eval(src, trg)
         
-        THIS IS AASUMED TO BE FOR A VECTOR PROBLEM
+        THIS IS ASSUMED TO BE FOR A VECTOR PROBLEM
         DOES NOT SUPPORT ON-SURFACE EVALUTION
         """
         self.qfs_bdy = qfs_bdy
@@ -280,16 +301,31 @@ class QFS_Evaluator_Pressure(object):
         Given list of densities taus (corresponding to b2c_funcs)
         Give back the density on the source curve
         """
-        return self.u2s(self._integrate_to_check(taus))
+        return self.cu2s(self._integrate_to_check(taus))
+
+    def bu2s(self, u):
+        """
+        get the density on source curve given u on the boundary
+        """
+        if not hasattr(self, 'bu2s_lu'):
+            mat = self.s2c_func(self.source_bdy, self.bdy)
+            smat = mat.dot(self.b2s_upsampler)
+            self.bu2s_lu = sp.linalg.lu_factor(smat)
+        w1 = sp.linalg.lu_solve(self.bu2s_lu, u)
+        return self.resample(w1[:-1], self.source_bdy.N)
+
+    def cu2s(self, u):
+        """
+        get the density on source curve given u/p on the check curve
+        """
+        w1 = sp.linalg.lu_solve(self.source_lu, u)
+        return self.resample(w1[:-1], self.source_bdy.N)
 
     def u2s(self, u):
         """
-        NEEDS TO BE UPGRADE TO (U, p) on check curve...
-
         get the density on source curve given u on the check curve
         """
-        w1 = sp.linalg.lu_solve(self.source_lu, u)
-        return self.resample(w1[:-1], self.source_bdy.N)        
+        return self.cu2s(u)
 
     def _integrate_to_check(self, taus):
         """
