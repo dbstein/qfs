@@ -42,16 +42,37 @@ def pressure_resampling_matrix(n1, n2):
     return mat
 def polygon_from_boundary(bdy):
     return shg.Polygon(zip(bdy.x, bdy.y))
-def build_error_estimate(bdy, alpha, scaleit=True):
+def _build_error_estimate(bdy, alpha, scaleit=True):
     if scaleit: alpha = alpha*bdy.dt
     return np.fft.ifft(np.fft.fft(bdy.c)*np.exp(-alpha*bdy.k))
+def build_error_estimate(bdy, alpha, scaleit=None, modes=5):
+    """
+    modes gives truncation of sums. as modse --> infty, this goes to _build_error_estimate
+    which can be noisy if the input bdy has any noise
+
+    A low modes typically gives very good error with good noise damping
+    """
+    kk = -alpha*bdy.k*bdy.dt
+    DXX = np.ones(bdy.N, dtype=float)
+    DXY = kk.copy()
+    for j in range(1, modes+1):
+        DXX += kk**(2*j)/sp.special.factorial(2*j)
+        DXY += kk**(2*j+1)/sp.special.factorial(2*j+1)
+    DXY = -1j*DXY
+    psi = DXY / DXX
+    xh = np.fft.fft(bdy.x)
+    yh = np.fft.fft(bdy.y)
+    out_xh = (xh - psi*yh) / DXX / (1 + psi**2)
+    out_yh = (yh + psi*xh) / DXX / (1 + psi**2)
+    out_x = np.fft.ifft(out_xh).real
+    out_y = np.fft.ifft(out_yh).real
+    return out_x + 1j*out_y
 def sign_from_side(interior):
     return 1 if interior else -1
-
 def get_fbdy_oversampling(bdy, M, MC, FF=0.0, eps=1e-10):
     OF = (M+FF)/MC + 1
     return even_it(bdy.N*OF) if OF > 1 else bdy.N
-def generate_source_boundary(bdy, interior=True, M=4, fsuf=None):
+def generate_source_boundary(bdy, interior=True, M=4, fsuf=None, modes=5):
     sign = -sign_from_side(interior)
     this_M = sign*M
     OS = 1.0
@@ -61,7 +82,7 @@ def generate_source_boundary(bdy, interior=True, M=4, fsuf=None):
         this_M /= fsuf
         OS *= fsuf
     while not valid:
-        ebdy1 = build_error_estimate(bdy, this_M)
+        ebdy1 = build_error_estimate(bdy, this_M, modes)
         this_N = even_it(bdy.N*OS)
         ebdy = GSB(c=resample(ebdy1, this_N))
         valid = polygon_from_boundary(ebdy).is_valid and ebdy.speed.min() > bdy.speed.min()*0.5
@@ -69,12 +90,12 @@ def generate_source_boundary(bdy, interior=True, M=4, fsuf=None):
             this_M /= 1.1
             OS *= 1.1
     return ebdy, this_N, this_M
-def generate_check_boundary(bdy, interior=True, MC=2):
+def generate_check_boundary(bdy, interior=True, MC=2, modes=5):
     sign = sign_from_side(interior)
     valid = False
     this_MC = sign*MC
     while not valid:
-        cbdy = GSB(c=build_error_estimate(bdy, this_MC))
+        cbdy = GSB(c=build_error_estimate(bdy, this_MC, modes))
         valid = polygon_from_boundary(cbdy).is_valid and cbdy.speed.min() > bdy.speed.min()*0.5
         if not valid:
             this_MC /= 1.1
@@ -84,12 +105,13 @@ class QFS_Boundary(object):
     """
     Container class for Quadrature by Fundamental Solutions
     """
-    def __init__(self, bdy, eps=1e-12, FF=0, forced_source_upsampling_factor=None):
+    def __init__(self, bdy, eps=1e-12, FF=0, forced_source_upsampling_factor=None, modes=5):
         """
         Initialize QFS object
 
         eps:       target goal for integrals
         FF: fudge factor- how much to up targets by
+        modes: number of modes used to generate source / check boundaries
         """
         self.bdy = bdy
         self.eps = eps
@@ -99,19 +121,19 @@ class QFS_Boundary(object):
         self.MC = min(M_EPS - self.MS, self.MS)
         self.forced_source_upsampling_factor = forced_source_upsampling_factor
         # generate the source boundaries
-        sbdy = generate_source_boundary(self.bdy, True, self.MS, forced_source_upsampling_factor)
+        sbdy = generate_source_boundary(self.bdy, True, self.MS, forced_source_upsampling_factor, modes)
         self.interior_source_bdy = sbdy[0]
         self.interior_source_N = sbdy[1]
         self.interior_source_M = sbdy[2]
-        sbdy = generate_source_boundary(self.bdy, False, self.MS, forced_source_upsampling_factor)
+        sbdy = generate_source_boundary(self.bdy, False, self.MS, forced_source_upsampling_factor, modes)
         self.exterior_source_bdy = sbdy[0]
         self.exterior_source_N = sbdy[1]
         self.exterior_source_M = sbdy[2]
         # generate the check boundary
-        cbdy = generate_check_boundary(self.bdy, True, self.MC)
+        cbdy = generate_check_boundary(self.bdy, True, self.MC, modes)
         self.interior_check_bdy = cbdy[0]
         self.interior_check_MC = cbdy[1]
-        cbdy = generate_check_boundary(self.bdy, False, self.MC)
+        cbdy = generate_check_boundary(self.bdy, False, self.MC, modes)
         self.exterior_check_bdy = cbdy[0]
         self.exterior_check_MC = cbdy[1]
         # generate the fine boundary
