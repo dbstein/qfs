@@ -52,21 +52,24 @@ def build_error_estimate(bdy, alpha, scaleit=None, modes=5):
 
     A low modes typically gives very good error with good noise damping
     """
-    kk = -alpha*bdy.k*bdy.dt
-    DXX = np.ones(bdy.N, dtype=float)
-    DXY = kk.copy()
-    for j in range(1, modes+1):
-        DXX += kk**(2*j)/sp.special.factorial(2*j)
-        DXY += kk**(2*j+1)/sp.special.factorial(2*j+1)
-    DXY = -1j*DXY
-    psi = DXY / DXX
-    xh = np.fft.fft(bdy.x)
-    yh = np.fft.fft(bdy.y)
-    out_xh = (xh - psi*yh) / DXX / (1 + psi**2)
-    out_yh = (yh + psi*xh) / DXX / (1 + psi**2)
-    out_x = np.fft.ifft(out_xh).real
-    out_y = np.fft.ifft(out_yh).real
-    return out_x + 1j*out_y
+    if modes == np.Inf:
+        return _build_error_estimate(bdy, alpha, scaleit)
+    else:
+        kk = -alpha*bdy.k*bdy.dt
+        DXX = np.ones(bdy.N, dtype=float)
+        DXY = kk.copy()
+        for j in range(1, modes+1):
+            DXX += kk**(2*j)/sp.special.factorial(2*j)
+            DXY += kk**(2*j+1)/sp.special.factorial(2*j+1)
+        DXY = -1j*DXY
+        psi = DXY / DXX
+        xh = np.fft.fft(bdy.x)
+        yh = np.fft.fft(bdy.y)
+        out_xh = (xh - psi*yh) / DXX / (1 + psi**2)
+        out_yh = (yh + psi*xh) / DXX / (1 + psi**2)
+        out_x = np.fft.ifft(out_xh).real
+        out_y = np.fft.ifft(out_yh).real
+        return out_x + 1j*out_y
 def sign_from_side(interior):
     return 1 if interior else -1
 def get_fbdy_oversampling(bdy, M, MC, FF=0.0, eps=1e-10):
@@ -82,7 +85,7 @@ def generate_source_boundary(bdy, interior=True, M=4, fsuf=None, modes=5):
         this_M /= fsuf
         OS *= fsuf
     while not valid:
-        ebdy1 = build_error_estimate(bdy, this_M, modes)
+        ebdy1 = build_error_estimate(bdy, this_M, modes=modes)
         this_N = even_it(bdy.N*OS)
         ebdy = GSB(c=resample(ebdy1, this_N))
         valid = polygon_from_boundary(ebdy).is_valid and ebdy.speed.min() > bdy.speed.min()*0.5
@@ -95,7 +98,7 @@ def generate_check_boundary(bdy, interior=True, MC=2, modes=5):
     valid = False
     this_MC = sign*MC
     while not valid:
-        cbdy = GSB(c=build_error_estimate(bdy, this_MC, modes))
+        cbdy = GSB(c=build_error_estimate(bdy, this_MC, modes=modes))
         valid = polygon_from_boundary(cbdy).is_valid and cbdy.speed.min() > bdy.speed.min()*0.5
         if not valid:
             this_MC /= 1.1
@@ -120,6 +123,7 @@ class QFS_Boundary(object):
         self.MS = self.raw_M + self.FF
         self.MC = min(M_EPS - self.MS, self.MS)
         self.forced_source_upsampling_factor = forced_source_upsampling_factor
+        self.modes = modes
         # generate the source boundaries
         sbdy = generate_source_boundary(self.bdy, True, self.MS, forced_source_upsampling_factor, modes)
         self.interior_source_bdy = sbdy[0]
@@ -148,7 +152,7 @@ class QFS_Boundary(object):
             return self.bdy, self.exterior_fine_bdy, self.exterior_source_bdy, self.exterior_check_bdy
     def get_shell(self, alpha, interior, N=None):
         sign = sign_from_side(interior)
-        bdy1 = build_error_estimate(self.bdy, alpha*sign, scaleit=False)
+        bdy1 = build_error_estimate(self.bdy, alpha*sign, scaleit=False, modes=self.modes)
         if N is not None:
             bdy1 = resample(bdy1, N)
         return GSB(c=bdy1)
@@ -160,13 +164,23 @@ class QFS_Boundary(object):
         ax.plot(wrap(sbdy.x), wrap(sbdy.y), color='red', linewidth=3)
         ax.plot(wrap(cbdy.x), wrap(cbdy.y), color='blue', linewidth=3)
         # get error estimates
-        e1 = build_error_estimate(fbdy, self.raw_M*sign_from_side(interior))
-        e2 = build_error_estimate(sbdy, self.raw_M*sign_from_side(interior))
+        e1 = build_error_estimate(fbdy, self.raw_M*sign_from_side(interior), modes=self.modes)
+        e2 = build_error_estimate(sbdy, self.raw_M*sign_from_side(interior), modes=self.modes)
         ax.plot(wrap(e1.real), wrap(e1.imag), color='gray', linewidth=1)
         ax.plot(wrap(e2.real), wrap(e2.imag), color='yellow', linewidth=1)
 
+class SVD_Solver(object):
+    def __init__(self, A, tol=1e-15):
+        self.A = A
+        self.U, S, self.VH = np.linalg.svd(self.A)
+        S[S < tol] = np.Inf
+        self.SI = 1.0/S
+    def __call__(self, b):
+        mult = self.SI[:,None] if len(b.shape) > 1 else self.SI
+        return self.VH.T.dot(mult*self.U.T.dot(b))
+
 class QFS_Evaluator(object):
-    def __init__(self, qfs_bdy, interior, b2c_funcs, s2c_func, on_surface=False, form_b2c=False, vector=False):
+    def __init__(self, qfs_bdy, interior, b2c_funcs, s2c_func, on_surface=False, form_b2c=False, vector=False, SVD=True):
         """
         Generate a function that takes on-surface density(s) --> source effective density
         interior: whether to construct evaluators for interior points (or exterior)
@@ -176,6 +190,7 @@ class QFS_Evaluator(object):
             of the form MAT = source_eval(src, trg)
         on_surface: are b2c_funcs actually b2b operators?
         vector: is this for a vector density, e.g. Stokes?
+        SVD: use SVD based inversion (more stable), or LU (less stable)
         """
         self.qfs_bdy = qfs_bdy
         self.interior = interior
@@ -184,6 +199,7 @@ class QFS_Evaluator(object):
         self.on_surface = on_surface
         self.form_b2c = form_b2c
         self.vector = vector
+        self.SVD = SVD
 
         self.resample_matrix = vector_resampling_matrix if self.vector else resample_matrix
         self.resample = vector_resample if self.vector else resample
@@ -205,10 +221,15 @@ class QFS_Evaluator(object):
         # get source --> check mats
         self.s2c_mat = self.s2c_func(self.source_bdy, self.check_bdy)
 
-        # get the LU decomposition of the source --> check matrix
-        self.b2s_upsampler = self.resample_matrix(self.bdy.N, self.source_bdy.N)
-        self.square_source_mat = self.s2c_mat.dot(self.b2s_upsampler)
-        self.source_lu = sp.linalg.lu_factor(self.square_source_mat)
+        if self.SVD:
+            self.b2s_upsampler = self.resample_matrix(self.bdy.N, self.source_bdy.N)
+            self.square_source_mat = self.s2c_mat.dot(self.b2s_upsampler)
+            self.source_svd = SVD_Solver(self.square_source_mat, tol=self.qfs_bdy.eps)
+        else:
+            # get the LU decomposition of the source --> check matrix
+            self.b2s_upsampler = self.resample_matrix(self.bdy.N, self.source_bdy.N)
+            self.square_source_mat = self.s2c_mat.dot(self.b2s_upsampler)
+            self.source_lu = sp.linalg.lu_factor(self.square_source_mat)
 
     def __call__(self, taus):
         """
@@ -223,19 +244,31 @@ class QFS_Evaluator(object):
         """
         if not hasattr(self, 'bu2s_lu'):
             if self.on_surface:
-                self.bu2s_lu = self.source_lu
+                if self.SVD:
+                    self.bu2s_svd = self.source_svd
+                else:
+                    self.bu2s_lu = self.source_lu
             else:
                 mat = self.s2c_func(self.source_bdy, self.bdy)
                 smat = mat.dot(self.b2s_upsampler)
-                self.bu2s_lu = sp.linalg.lu_factor(smat)
-        w1 = sp.linalg.lu_solve(self.bu2s_lu, u)
+                if self.SVD:
+                    self.bu2s_svd = SVD_Solver(smat, tol=self.qfs_bdy.eps)
+                else:
+                    self.bu2s_lu = sp.linalg.lu_factor(smat)
+        if self.SVD:
+            w1 = self.bu2s_svd(u)
+        else:
+            w1 = sp.linalg.lu_solve(self.bu2s_lu, u)
         return self.resample(w1, self.source_bdy.N)    
 
     def cu2s(self, u):
         """
         get the density on source curve given u on the check curve
         """
-        w1 = sp.linalg.lu_solve(self.source_lu, u)
+        if self.SVD:
+            w1 = self.source_svd(u)
+        else:
+            w1 = sp.linalg.lu_solve(self.source_lu, u)
         return self.resample(w1, self.source_bdy.N)    
 
     def u2s(self, u):
