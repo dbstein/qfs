@@ -32,6 +32,13 @@ def shift_bdy_normal(bdy, M):
     if M < 0, shifts into exterior
     """
     return bdy.c - M*bdy.dt*bdy.normal_c
+def shift_bdy_weighted_normal(bdy, M):
+    """
+    Shift bdy M*h*speed units along normal
+    if M > 0, shifts into interior
+    if M < 0, shifts into exterior
+    """
+    return bdy.c - M*bdy.dt*bdy.speed*bdy.normal_c
 def shift_bdy_int(bdy, M, modes):
     """
     Shift bdy 'M*h units' according to formula in paper
@@ -115,7 +122,7 @@ def vector_resampling_matrix(n1, n2):
 class SVD_Solver(object):
     def __init__(self, A, tol=1e-15):
         self.A = A
-        self.U, S, self.VH = np.linalg.svd(self.A)
+        self.U, S, self.VH = np.linalg.svd(self.A, full_matrices=False)
         S[S < tol] = np.Inf
         self.SI = 1.0/S
         self.VV = self.VH.conj().T
@@ -123,6 +130,31 @@ class SVD_Solver(object):
     def __call__(self, b):
         mult = self.SI[:,None] if len(b.shape) > 1 else self.SI
         return self.VV.dot(mult*self.UU.dot(b))
+
+class QR_Solver(object):
+    def __init__(self, A):
+        self.A = A
+        self.sh = A.shape
+        self.overdetermined = self.sh[0] < self.sh[1]
+        self.build()
+    def build(self):
+        if self.overdetermined:
+            self.build_overdetermined()
+        else:
+            self.build_underdetermined()
+    def build_overdetermined(self):
+        self.Q, self.R = sp.linalg.qr(self.A.T, mode='economic', check_finite=False)
+    def build_underdetermined(self):
+        self.Q, self.R = sp.linalg.qr(self.A, mode='economic', check_finite=False)
+    def __call__(self, b):
+        if self.overdetermined:
+            return self.solve_overdetermined(b)
+        else:
+            return self.solve_underdetermined(b)
+    def solve_overdetermined(self, b):
+        return self.Q.conj().dot(sp.linalg.solve_triangular(self.R, b, trans=1))
+    def solve_underdetermined(self, b):
+        return sp.linalg.solve_triangular(self.R, self.Q.conj().T.dot(b))
 
 class LU_Solver(object):
     def __init__(self, A):
@@ -245,6 +277,25 @@ class BlockCirculant2x2_Solver(object):
         return x1, x2
 
 ################################################################################
+# Classes to handle check upsampling
+
+class QFS_Check_Upsampler(object):
+    def build(self, n, un):
+        self.n = n
+        self.un = un
+    def __call__(self, f):
+        raise NotImplementedError
+class QFS_Scalar_Check_Upsampler(QFS_Check_Upsampler):
+    def __call__(self, f):
+        return resample(f, self.un)
+class QFS_Vector_Check_Upsampler(QFS_Check_Upsampler):
+    def __call__(self, f):
+        return vector_resample(f, self.un)
+class QFS_Null_Check_Upsampler(QFS_Check_Upsampler):
+    def __call__(self, f):
+        return f
+
+################################################################################
 # Classes to handle s2c interaction
 
 class QFS_Inverter(object):
@@ -264,7 +315,7 @@ class QFS_Inverter(object):
         func = vector_resample if self.vector else resample
         return func(tau, self.sN)
     def shallow_copy(self):
-        return QFS_Inverter(self.func, self.vector)
+        return type(self)(self.func, self.vector)
     def __call__(self, tau):
         raise NotImplementedError
 
@@ -287,7 +338,7 @@ class QFS_Square_Dense_Inverter(QFS_Inverter):
         w = self.Inverter(tau)
         if self.resampled:
             w = self.resample(w)
-        return w    
+        return w
 
 class QFS_LU_Inverter(QFS_Square_Dense_Inverter):
     def get_inverter(self):
@@ -296,6 +347,30 @@ class QFS_LU_Inverter(QFS_Square_Dense_Inverter):
 class QFS_Square_SVD_Inverter(QFS_Square_Dense_Inverter):
     def get_inverter(self):
         return SVD_Solver(self.square_source_mat, self.tol)
+
+class QFS_Square_QR_Inverter(QFS_Square_Dense_Inverter):
+    def get_inverter(self):
+        return QR_Solver(self.square_source_mat)
+
+class QFS_Rectangular_Dense_Inverter(QFS_Inverter):
+    def build(self, source, check, tol):
+        super().build(source, check, tol)
+        # source --> check mat
+        self.mat = self.func(self.source, self.check)
+        self.Inverter = self.get_inverter()
+    def get_inverter(self):
+        raise NotImplementedError
+    def __call__(self, tau):
+        w = self.Inverter(tau)
+        return w
+
+class QFS_Rectangular_SVD_Inverter(QFS_Rectangular_Dense_Inverter):
+    def get_inverter(self):
+        return SVD_Solver(self.mat, self.tol)
+
+class QFS_Rectangular_QR_Inverter(QFS_Rectangular_Dense_Inverter):
+    def get_inverter(self):
+        return QR_Solver(self.mat)
 
 class QFS_Circulant_Inverter(QFS_Inverter):
     def build(self, source, check, tol):
@@ -321,6 +396,26 @@ class QFS_Circulant_Inverter(QFS_Inverter):
         if self.resampled:
             tau = self.resample(tau)
         return self.Inverter(tau)
+
+def QFS_s2c_factory(func, vector=False):
+    def build_s2c(options):
+        s2c_type = options['s2c_type']
+
+        if s2c_type == 'LU':
+            s2c = QFS_LU_Inverter(func, vector=vector)
+        elif s2c_type == 'Square_SVD':
+            s2c = QFS_Square_SVD_Inverter(func, vector=vector)
+        elif s2c_type == 'Square_QR':
+            s2c = QFS_Square_QR_Inverter(func, vector=vector)
+        elif s2c_type in ['Rectangular_SVD', 'SVD']:
+            s2c = QFS_Rectangular_SVD_Inverter(func, vector=vector)
+        elif s2c_type in ['Rectangular_QR', 'QR']:
+            s2c = QFS_Rectangular_QR_Inverter(func, vector=vector)
+        elif s2c_type == 'Circulant':
+            s2c = QFS_Circulant_Inverter(func, vector=vector)
+
+        return s2c
+    return build_s2c
 
 ################################################################################
 # Classes to handle b2c interaction
@@ -418,7 +513,6 @@ def B2C_Easy_Circulant_One_Column(func, vector=False):
                     m = m[:,0]
                 self.mh = np.fft.fft(m)
             def dot(self, x):
-                print(x.dtype)
                 out = np.fft.ifft(self.mh*np.fft.fft(x))
                 return out.real if x.dtype == float else out
     return Easy_Circulant
@@ -475,6 +569,9 @@ def _check_b2c(b2c):
 def _check_s2c_inverter(s2c_inverter):
     assert isinstance(s2c_inverter, QFS_Inverter), 's2c_inverter must be of type QFS_Inverter'
     return s2c_inverter
+def _check_cu(cu):
+    assert isinstance(cu, QFS_Check_Upsampler), 'cu must be of type QFS_Check_Upsampler'
+    return cu
 def _check_tol(tol):
     assert type(tol) == float, 'tol must be a float'
     assert tol > 0, 'tol must be positive'
@@ -486,8 +583,8 @@ def _check_maximum_distance(maximum_distance):
         assert maximum_distance > 0, 'maximum_distance must be positive'
     return maximum_distance
 def _check_shift_type(shift_type):
-    assert type(shift_type) == int or shift_type in ['complex', 'normal'], \
-        "shift_type must be an int, 'complex', or 'normal'"
+    assert type(shift_type) == int or shift_type in ['complex', 'normal', 'weighted_normal'], \
+        "shift_type must be an int, 'complex', 'normal', or 'weighted_normal'"
     if type(shift_type) == int:
         assert shift_type >= 1, \
             'if shift_type is an int, it must be 1 or larger'
@@ -497,8 +594,9 @@ def _check_shift_type(shift_type):
 # The actual QFS Class
 
 class QFS(object):
-    def __init__(self, bdy, interior, b2c, s2c_inverter, tol=1e-14, *,
-                                            maximum_distance=None, shift_type=2):
+    def __init__(self, bdy, interior, b2c, s2c_inverter, cu, tol=1e-14, *,
+                    maximum_distance=None, shift_type=2,
+                    source_upsample_factor=1.0, check_upsample_factor=1.0):
         """
         Quadrature by Fundamental Solutions Object
 
@@ -510,6 +608,8 @@ class QFS(object):
             boundary --> check evaluator class
         s2c_inverter: QFS_Inverter
             source --> check inversion method
+        cu: QFS_Check_Upsampler
+            check --> upsampled check upsampler
         tol: float
             estimated error in evaluations
             note this is not guaranteed --- it is based on Poisson eq theory,
@@ -531,25 +631,38 @@ class QFS(object):
                 if you have a *very smooth and well resolved* boundary
             If 'normal', uses constant-distance normal translation. Very
                 innacurate and mostly for testing purposes
+        source_upsample_factor: how much to upsample source by, AFTER positioning it
+            this upsampling is above and beyond what is needed by Laplace asymptotics
+        check_upsample_factor: how much to upsample the check curve, AFTER positioning it
+            this is only used in the s2c phase --- b2c still evals onto check, this
+            gets upsampled, and then fed into an upsampled s2c evaluator
         """
         # check and store inputs
         self.bdy = _check_bdy(bdy)
         self.interior = _check_interior(interior)
         self.b2c = _check_b2c(b2c)
+        self.cu = _check_cu(cu)
         self.s2c_inverter = _check_s2c_inverter(s2c_inverter)
         self.tol = _check_tol(tol)
         self.maximum_distance = _check_maximum_distance(maximum_distance)
         self.shift_type = _check_shift_type(shift_type)
+        self.source_upsample_factor = source_upsample_factor
+        self.check_upsample_factor = check_upsample_factor
         
         # compute M (used for computing where check/source curves go)
         # these are the initial values
         self.Initial_MS = np.log(self.tol) / (-2*np.pi)        
-        self.Initial_MC = min(M_EPS - self.Initial_MS, self.Initial_MS)
+        # self.Initial_MC = min(M_EPS - self.Initial_MS, self.Initial_MS)
+        self.Initial_MC = M_EPS - self.Initial_MS
 
         # Ready Boundary --> Check Evaluator
         self._ready_b2c()
         # Get Source Curve
         self._get_source()
+        # upsample source, if requested
+        self._upsample_source()
+        # upsample check (and boundary), if requested
+        self._upsample_check()
         # Ready Source --> Check Inverter
         self._ready_s2c()
 
@@ -560,14 +673,21 @@ class QFS(object):
         """
         Get effective density on souce curve given densities on boundary
         """
-        return self.s2c_inverter(self.b2c(tau_list))
+        # evaluate onto the check surface
+        u = self.b2c(tau_list)
+        # upsample to upcheck surface
+        fu = self._check_upsample(u)
+        # solve for density
+        return self.s2c_inverter(fu)
 
     def u2s(self, u):
         """
         get the density on source curve given u on the boundary
         """
         self._ready_s2b()
-        return self.s2b_inverter(u)
+        # upsample u to upcheck surface
+        fu = self._check_upsample(u)
+        return self.s2b_inverter(fu)
 
     def get_normal_shift(self, M):
         return shift_bdy_normal(self.bdy, M)
@@ -576,7 +696,7 @@ class QFS(object):
     # Private methods
 
     def _ready_s2c(self):
-        self.s2c_inverter.build(self.source, self.check, self.tol)
+        self.s2c_inverter.build(self.source, self.upcheck, 1e-15)
     def _ready_b2c(self):
         singular = self.b2c.singular
         if singular:
@@ -593,12 +713,14 @@ class QFS(object):
     def _ready_s2b(self):
         if not hasattr(self, 's2b_inverter'):
             self.s2b_inverter = self.s2c_inverter.shallow_copy()
-            self.s2b_inverter.build(self.source, self.bdy, self.tol)
+            self.s2b_inverter.build(self.source, self.upbdy, 1e-15)
     def _get_shifted_bdy(self, M):
         if self.shift_type == 'complex':
             return shift_bdy_complex(self.bdy, M)
         elif self.shift_type == 'normal':
             return shift_bdy_normal(self.bdy, M)
+        elif self.shift_type == 'weighted_normal':
+            return shift_bdy_weighted_normal(self.bdy, M)
         else:
             return shift_bdy_int(self.bdy, M, self.shift_type)
     def _place_shfited_bdy(self, M, sign, upsample):
@@ -632,6 +754,22 @@ class QFS(object):
     def _get_source(self):
         sign = -1 if self.interior else 1
         self.source, self.MS = self._place_shfited_bdy(self.Initial_MS, sign, True)
+    def _upsample_source(self):
+        if self.source_upsample_factor != 1.0:
+            un = 2*int(self.source.N*self.source_upsample_factor*0.5)
+            self.source = GSB(c=resample(self.source.c, un))
+    def _upsample_check(self):
+        if self.check_upsample_factor != 1.0:
+            un = 2*int(self.check.N*self.check_upsample_factor*0.5)
+            self.upcheck = GSB(c=resample(self.check.c, un))
+            self.upbdy = GSB(c=resample(self.bdy.c, un))
+            self.cu.build(self.check.N, un)
+        else:
+            self.upcheck = self.check
+            self.upbdy = self.bdy
+            self.cu = QFS_Null_Check_Upsampler()
+    def _check_upsample(self, f):
+        return self.cu(f)
 
 def l2v(f):
     err = 'density must be 1-vector with length 2*N, or 2-vector with shape [2,N]'
@@ -645,8 +783,9 @@ def l2v(f):
     else:
         raise Exception(err)
 class QFS_Pressure(QFS):
-    def __init__(self, bdy, interior, b2c, s2c_inverter, b2p_funcs, s2p_func, 
-                            tol=1e-14, *, maximum_distance=None, shift_type=2):
+    def __init__(self, bdy, interior, b2c, s2c_inverter, cu, b2p_funcs, s2p_func, 
+                            tol=1e-14, *, maximum_distance=None, shift_type=2,
+                            source_upsample_factor=1.0, check_upsample_factor=1.0):
         """
         QFS Evaluator for vector functions with pressure (such as Stokes)
         additional args:
@@ -660,8 +799,10 @@ class QFS_Pressure(QFS):
             b2p_funcs and s2p_func must operate on the same densities that
             b2c / s2c methods operate on
         """
-        super().__init__(bdy, interior, b2c, s2c_inverter, tol,
-                    maximum_distance=maximum_distance, shift_type=shift_type)
+        super().__init__(bdy, interior, b2c, s2c_inverter, cu, tol,
+                    maximum_distance=maximum_distance, shift_type=shift_type,
+                    source_upsample_factor=source_upsample_factor,
+                    check_upsample_factor=check_upsample_factor)
         self.b2p_funcs = b2p_funcs
         self.s2p_func = s2p_func
         self._generate_pressure_target()
@@ -726,9 +867,9 @@ class QFS_Pressure(QFS):
         return self._sigma_adjust(sigma, pe-np.sum(pts))
     def convert_uvp(self, u, v, p):
         pt = p[0] if type(p) == np.ndarray else p
-        sigma = self.bu2s(np.concatenate([u, v]))
+        sigma = self.u2s(np.concatenate([u, v]))
         # pressure from effective charges
-        pe = self.self.s2pb0_mat.dot(sigma)
+        pe = self.s2pb0_mat.dot(sigma)
         return self._sigma_adjust(sigma, pe-pt)
 
 
