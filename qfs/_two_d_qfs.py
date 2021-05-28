@@ -203,7 +203,6 @@ def PBCM(A, R, theta):
     rx = R[:n]
     ry = R[n:]
     ct, st = np.cos(theta), np.sin(theta)
-    # import pdb; pdb.set_trace()
     rot_a =  ct*a*ct[0] + ct*b*st[0] + st*c*ct[0] + st*d*st[0]
     rot_b = -ct*a*st[0] + ct*b*ct[0] - st*c*st[0] + st*d*ct[0]
     rot_c = -st*a*ct[0] - st*b*st[0] + ct*c*ct[0] + ct*d*st[0]
@@ -212,8 +211,31 @@ def PBCM(A, R, theta):
     rt = -st*rx + ct*ry
     ur, ut = block_circulant_multiply(rot_a, rot_b, rot_c, rot_d, rr, rt)
     ux = ct*ur - st*ut
-    uy = st*ur + ct*ut    
+    uy = st*ur + ct*ut
     return np.concatenate([ux, uy])
+
+def get_ct_st(t, ct, st):
+    if ct is None and st is None:
+        n = t.size
+        ct = np.cos(t)
+        st = np.sin(t)
+    else:
+        n = ct.size
+    return ct, st, n
+def fx_fy_2_fr_ft(Rxy, t=None, ct=None, st=None):
+    ct, st, n = get_ct_st(t, ct, st)
+    Rx = Rxy[:n]
+    Ry = Rxy[n:]
+    Rr =  ct*Rx + st*Ry
+    Rt = -st*Rx + ct*Ry
+    return np.concatenate([Rr, Rt])
+def fr_ft_2_fx_fy(Rrt, t=None, ct=None, st=None):
+    ct, st, n = get_ct_st(t, ct, st)
+    Rr = Rrt[:n]
+    Rt = Rrt[n:]
+    Rx = ct*Rr - st*Rt
+    Ry = st*Rr + ct*Rt
+    return np.concatenate([Rx, Ry])
 
 class PolarBlockCirculant2x2_solver(object):
     """
@@ -691,6 +713,19 @@ class QFS(object):
 
     def get_normal_shift(self, M):
         return shift_bdy_normal(self.bdy, M)
+
+    def get_b2b_matrix(self):
+        """
+        Generate singular bdy --> bdy matrix
+
+        If all b2c and s2c support formation, proceeds via dense matrix operations
+            (reasonably fast)
+        If all b2c and s2c are circulant, generates circulant representation
+            (very fast)
+        Otherwise, reverts to brute force construction
+            (slow)
+        """
+        raise NotImplementedError
 
     ############################################################################
     # Private methods
