@@ -215,7 +215,7 @@ def set_default_kwargs(kwargs):
 
 def build_s2c(options, interior):
     NSLP = Fixed_SLP if True else Naive_SLP
-    return QFS_s2c_factory(Naive_SLP, vector=True)(options)
+    return QFS_s2c_factory(NSLP, vector=True)(options)
 
 def build_b2c(slp, dlp, interior, options):
     b2c_type = options['b2c_type']

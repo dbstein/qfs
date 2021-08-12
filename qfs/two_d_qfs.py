@@ -438,4 +438,4 @@ class QFS_Pressure_Evaluator(QFS_Evaluator):
         pe = self.s2pb0_mat.dot(sigma)
         return self._sigma_adjust(sigma, pe-pt)
 
-
+QFS_Evaluator_Pressure = QFS_Pressure_Evaluator

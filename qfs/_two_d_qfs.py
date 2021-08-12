@@ -894,12 +894,15 @@ class QFS_Pressure(QFS):
         Give back the density on the source curve
         """
         sigma = super().__call__(tau_list)
-        # pressure from effective charges
-        pe = self.s2p_mat.dot(sigma)
-        # directly computed pressure
-        ftaus = [vector_resample(tau, self.pressure_fine_bdy.N) for tau in tau_list]
-        pts = [f2p_mat.dot(tau) for f2p_mat, tau in zip(self.f2p_mats, ftaus)]
-        return self._sigma_adjust(sigma, pe-np.sum(pts))
+        if self.interior:
+            # pressure from effective charges
+            pe = self.s2p_mat.dot(sigma)
+            # directly computed pressure
+            ftaus = [vector_resample(tau, self.pressure_fine_bdy.N) for tau in tau_list]
+            pts = [f2p_mat.dot(tau) for f2p_mat, tau in zip(self.f2p_mats, ftaus)]
+            return self._sigma_adjust(sigma, pe-np.sum(pts))
+        else:
+            return sigma
     def convert_uvp(self, u, v, p):
         pt = p[0] if type(p) == np.ndarray else p
         sigma = self.u2s(np.concatenate([u, v]))
@@ -907,4 +910,106 @@ class QFS_Pressure(QFS):
         pe = self.s2pb0_mat.dot(sigma)
         return self._sigma_adjust(sigma, pe-pt)
 
+class EmptyQFS(object):
+    def __init__(self, bdy, interior, tol=1e-14, shift_type=2):
+        """
+        Generates just the curves for QFS, but nothing else...
 
+        primarily to computer source and check curves:
+            EmptyQFS.source
+            EmptyQFS.check
+        along with fine_n
+            EmptyQFS.fine_n
+            (this is the n that the boundary should be upsampled to in order
+            to use naive evaluation onto the check surface)
+
+        bdy: GlobalSmoothBoundary
+            boundary to generate evaluator for
+        interior: bool
+            is this for interior or exterior evaluation?
+        tol: float
+            estimated error in evaluations
+            note this is not guaranteed --- it is based on Poisson eq theory,
+            and is used in multiple steps, so errors can add
+            but it is usually pretty accurate as a guideline
+        shift_type: (int, 'complex', normal')
+            How to shift the boundary to get check and effective surfaces.
+            If an int, done according to the formula in paper.
+                1 gives speed-weighted normal vector
+                Higher values are unstable. 2 is a pretty good compromise.
+            If 'complex', uses complex translation. This makes error estimates
+                (see tol) most accurate, but is *extremely* unstable. Only use
+                if you have a *very smooth and well resolved* boundary
+            If 'normal', uses constant-distance normal translation. Very
+                innacurate and mostly for testing purposes
+        """
+        # check and store inputs
+        self.bdy = bdy
+        self.interior = interior
+        self.tol = tol
+        self.shift_type = shift_type
+        
+        # compute M (used for computing where check/source curves go)
+        # these are the initial values
+        self.Initial_MS = np.log(self.tol) / (-2*np.pi)
+        self.Initial_MC = M_EPS - self.Initial_MS
+
+        # Get Check Curve
+        self._get_check()
+        # Get Source Curve
+        self._get_source()
+
+    ############################################################################
+    # Public Methods
+
+    def get_normal_shift(self, M):
+        return shift_bdy_normal(self.bdy, M)
+
+    ############################################################################
+    # Private methods
+
+    def _get_shifted_bdy(self, M):
+        if self.shift_type == 'complex':
+            return shift_bdy_complex(self.bdy, M)
+        elif self.shift_type == 'normal':
+            return shift_bdy_normal(self.bdy, M)
+        elif self.shift_type == 'weighted_normal':
+            return shift_bdy_weighted_normal(self.bdy, M)
+        else:
+            return shift_bdy_int(self.bdy, M, self.shift_type)
+    def _place_shfited_bdy(self, M, sign, upsample):
+        # assess distance between first-try and maximum_distance
+        if self.maximum_distance is not None:
+            sbdy = self._get_shifted_bdy(MH)
+            sep = np.abs(bdy.c-sbdy.c).max()
+            if sep > self.maximum_distance:
+                OS = sep / self.maximum_distance
+                MH = sign*M/OS
+            else:
+                OS = 1.0
+                MH = sign*M
+        else:
+            OS = 1.0
+            MH = sign*M
+        # okay, now we have our first guess for M and oversampling required
+        # try it out, if it fails, move closer and refine
+        valid = False
+        while not valid:
+            sbdyc = self._get_shifted_bdy(MH)
+            if upsample:
+                sbdyc = get_upsampled_bdyc(sbdyc, OS)
+            sbdyp = polygon_from_bdyc(sbdyc)
+            sbdys = speed_from_bdyc(sbdyc)
+            valid = sbdyp.is_valid and sbdys.min() > self.bdy.speed.min()*0.5
+            if not valid:
+                OS *= 1.1
+                MH /= 1.1
+        return GSB(c=sbdyc), MH
+    def _get_source(self):
+        sign = -1 if self.interior else 1
+        self.source, self.MS = self._place_shfited_bdy(self.Initial_MS, sign, True)
+    def _get_check(self):
+        sign = 1 if self.interior else -1
+        self.check, self.MC = self._place_shfited_bdy(self.Initial_MC, sign, False)
+        OF = self.Initial_MS/np.abs(self.MC) + 1
+        self.fine_n = 2*int(0.5*OF*self.bdy.N)
