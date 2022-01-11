@@ -49,6 +49,39 @@ def shift_bdy_int(bdy, M, modes):
     kk = -M*bdy.k*bdy.dt
     DXX = np.ones(bdy.N, dtype=float)
     DXY = kk.copy()
+    if True: # faster version of the below
+        kkj = kk.copy()
+        fac = 1
+        for j in range(1, modes+1):
+            kkj *= kk
+            fac *= (2*j)
+            DXX += kkj/fac
+            kkj *= kk
+            fac *= (2*j+1)
+            DXY += kkj/fac
+    else:
+        for j in range(1, modes+1):
+            DXX += kk**(2*j)/sp.special.factorial(2*j)
+            DXY += kk**(2*j+1)/sp.special.factorial(2*j+1)
+    DXY = -1j*DXY
+    psi = DXY / DXX
+    xh = np.fft.fft(bdy.x)
+    yh = np.fft.fft(bdy.y)
+    out_xh = (xh - psi*yh) / DXX / (1 + psi**2)
+    out_yh = (yh + psi*xh) / DXX / (1 + psi**2)
+    out_x = np.fft.ifft(out_xh).real
+    out_y = np.fft.ifft(out_yh).real
+    return out_x + 1j*out_y
+def _shift_bdy_int(bdy, M, modes):
+    """
+    Shift bdy 'M*h units' according to formula in paper
+    if modes=1, this is speed-weigthed normal translation
+    if M > 0, shifts into interior
+    if M < 0, shifts into exterior
+    """
+    kk = -M*bdy.k*bdy.dt
+    DXX = np.ones(bdy.N, dtype=float)
+    DXY = kk.copy()
     for j in range(1, modes+1):
         DXX += kk**(2*j)/sp.special.factorial(2*j)
         DXY += kk**(2*j+1)/sp.special.factorial(2*j+1)
@@ -785,6 +818,8 @@ class QFS(object):
             if not valid:
                 OS *= 1.1
                 MH /= 1.1
+                if OS > 10:
+                    raise Exception('Source oversampling factor > 10; QFS cannot be efficiently generated; refine boundary.')
         return GSB(c=sbdyc), MH
     def _get_source(self):
         sign = -1 if self.interior else 1
