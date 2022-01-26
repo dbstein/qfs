@@ -651,7 +651,7 @@ def _check_shift_type(shift_type):
 class QFS(object):
     def __init__(self, bdy, interior, b2c, s2c_inverter, cu, tol=1e-14, *,
                     maximum_distance=None, shift_type=2,
-                    source_upsample_factor=1.0, check_upsample_factor=1.0):
+                    source_upsample_factor=1.0, check_upsample_factor=1.0, closer_source=False):
         """
         Quadrature by Fundamental Solutions Object
 
@@ -704,11 +704,15 @@ class QFS(object):
         self.source_upsample_factor = source_upsample_factor
         self.check_upsample_factor = check_upsample_factor
         
-        # compute M (used for computing where check/source curves go)
-        # these are the initial values
-        self.Initial_MS = np.log(self.tol) / (-2*np.pi)        
-        # self.Initial_MC = min(M_EPS - self.Initial_MS, self.Initial_MS)
-        self.Initial_MC = M_EPS - self.Initial_MS
+        if closer_source:
+            self.Initial_MS = np.log(self.tol) / (-2*np.pi) / self.source_upsample_factor
+            self.Initial_MC = (M_EPS - self.Initial_MS) / self.source_upsample_factor
+        else:
+            # compute M (used for computing where check/source curves go)
+            # these are the initial values
+            self.Initial_MS = np.log(self.tol) / (-2*np.pi)        
+            # self.Initial_MC = min(M_EPS - self.Initial_MS, self.Initial_MS)
+            self.Initial_MC = M_EPS - self.Initial_MS
 
         # Ready Boundary --> Check Evaluator
         self._ready_b2c()
