@@ -1,31 +1,39 @@
 import numpy as np
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-plt.ion()
-
-import pybie2d
-star = pybie2d.misc.curve_descriptions.star
-GSB = pybie2d.boundaries.global_smooth_boundary.global_smooth_boundary.Global_Smooth_Boundary
-PointSet = pybie2d.point_set.PointSet
-
-from qfs.helmholtz_qfs import Helmholtz_QFS
+from qfs.helmholtz_qfs import Helmholtz_QFS, Naive_CF
 from scipy.special import hankel1
-from pyfmmlib2d import HFMM
+
+try:
+    import pybie2d
+    PointSet = pybie2d.point_set.PointSet
+    GSB = pybie2d.boundaries.global_smooth_boundary.global_smooth_boundary.Global_Smooth_Boundary
+    star = pybie2d.misc.curve_descriptions.star
+    Modified_Helmholtz_Layer_Apply = pybie2d.kernels.high_level.modified_helmholtz.Modified_Helmholtz_Layer_Apply
+except:
+    print('Running in fallback mode')
+    from qfs.fallbacks.boundaries import PointSet
+    from qfs.fallbacks.boundaries import Global_Smooth_Boundary as GSB
+    from qfs.fallbacks.curve_descriptions import star
+    from qfs.fallbacks.modified_helmholtz import Modified_Helmholtz_Layer_Form
 
 # estimated tolerance for integrals
 tol = 1e-14
 # number of points in boundary discretization
-n = 300
+n = 200
 # shell distance to test close eval at
 shell_distance = 0.1
 # see documentation for QFS
-shift_type = 1
+shift_type = 5
 # use singular eval or not
 singular = False
-# type of inverse to use ('LU', 'SVD', 'Circulant')
-s2c_type = 'Circulant'
-# Form, Apply, or Circulant
-b2c_type = 'Circulant'
+# rectangular methods: 'QR', 'SVD'
+# square methods: 'LU', 'Square_QR', 'Square_SVD', 'Circulant'
+s2c_type = 'LU'
+# 'Form', 'Apply', or 'Circulant'
+b2c_type = 'Form'
+# source upsampling
+source_upsample_factor = 1.0
+# check upsampling
+check_upsample_factor = 1.0
 # Helmholtz parameter
 k = 10.0
 
@@ -37,12 +45,8 @@ def HGF(r, k):
 def HGFP(r, k):
     return k*0.25j*hankel1(1, k*r)/r
 def Apply_CF(src, trg, tau, k=1.0):
-    source = src.get_stacked_boundary()
-    target = trg.get_stacked_boundary()
-    normals = src.get_stacked_normal()
-    wtau = tau*src.weights
-    out = HFMM(source, target, charge=-1j*k*wtau, dipstr=wtau, dipvec=normals, helmholtz_parameter=k, compute_target_potential=True)
-    return out['target']['u']
+    get_CF = Naive_CF(k)
+    return get_CF(src, trg).dot(tau)
 
 def interior_solution_function(x, y):
     xc = 1.1
@@ -67,11 +71,16 @@ def exterior_solution_function_dn(x, y, nx, ny):
 # Generate options dictionary
 
 options = {
-    'tol'        : tol,
-    'shift_type' : shift_type,
     'b2c_type'   : b2c_type,
     's2c_type'   : s2c_type,
     'singular'   : singular,
+}
+
+qfs_kwargs = {
+    'tol'                    : tol,
+    'shift_type'             : shift_type,
+    'source_upsample_factor' : source_upsample_factor,
+    'check_upsample_factor'  : check_upsample_factor,
 }
 
 ############################################################################
@@ -114,7 +123,7 @@ for interior in [True, False]:
     ############################################################################
     # Setup qfs operators
 
-    qfs = Helmholtz_QFS(bdy, interior, True, True, k, options)
+    qfs = Helmholtz_QFS(bdy, interior, True, True, k, options, **qfs_kwargs)
 
     ############################################################################
     # Solve for effective density and extract effective sources

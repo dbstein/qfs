@@ -1,5 +1,4 @@
 import numpy as np
-import pybie2d
 
 from qfs._two_d_qfs import QFS, QFS_B2C
 from qfs._two_d_qfs import QFS_LU_Inverter, QFS_Circulant_Inverter
@@ -9,7 +8,11 @@ from qfs._two_d_qfs import B2C_Easy_Apply, B2C_Easy_Circulant
 from qfs._two_d_qfs import QFS_Scalar_Check_Upsampler
 from qfs._two_d_qfs import QFS_s2c_factory
 
-from pyfmmlib2d import HFMM
+try:
+    from pyfmmlib2d import HFMM
+except:
+    import warnings
+    warnings.warn("pyfmmlib2d not found, Apply backend won't work.")
 from scipy.special import hankel1
 
 ################################################################################

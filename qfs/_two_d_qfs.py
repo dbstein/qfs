@@ -8,10 +8,13 @@ import scipy.signal
 import warnings
 import shapely.geometry as shg
 
-import pybie2d
-GSB = pybie2d.boundaries.global_smooth_boundary.global_smooth_boundary.Global_Smooth_Boundary
-MGSB = pybie2d.boundaries.global_smooth_boundary.global_smooth_boundary.Minimal_Global_Smooth_Boundary
-PointSet = pybie2d.point_set.PointSet
+try:
+    import pybie2d
+    GSB = pybie2d.boundaries.global_smooth_boundary.global_smooth_boundary.Global_Smooth_Boundary
+    PointSet = pybie2d.point_set.PointSet
+except:
+    from qfs.fallbacks.boundaries import PointSet
+    from qfs.fallbacks.boundaries import Global_Smooth_Boundary as GSB
 
 M_EPS = np.log(np.finfo(float).eps) / (-2*np.pi)
 
@@ -468,6 +471,8 @@ def QFS_s2c_factory(func, vector=False):
             s2c = QFS_Rectangular_QR_Inverter(func, vector=vector)
         elif s2c_type == 'Circulant':
             s2c = QFS_Circulant_Inverter(func, vector=vector)
+        else:
+            raise Exception('s2c_type not recognized.')
 
         return s2c
     return build_s2c

@@ -1,5 +1,4 @@
 import numpy as np
-import pybie2d
 
 from qfs._two_d_qfs import QFS_Pressure, QFS_B2C
 from qfs._two_d_qfs import QFS_LU_Inverter, QFS_Circulant_Inverter
@@ -12,15 +11,20 @@ from qfs._two_d_qfs import QFS_s2c_factory
 ################################################################################
 # Setup Test
 
-Laplace_Layer_Apply = pybie2d.kernels.high_level.laplace.Laplace_Layer_Apply
-Laplace_Layer_Form = pybie2d.kernels.high_level.laplace.Laplace_Layer_Form
-Stokes_Layer_Apply = pybie2d.kernels.high_level.stokes.Stokes_Layer_Apply
-Stokes_Layer_Form = pybie2d.kernels.high_level.stokes.Stokes_Layer_Form
-Stokes_Layer_Singular_Form = pybie2d.kernels.high_level.stokes.Stokes_Layer_Singular_Form
+try:
+    import pybie2d
+    Laplace_Layer_Apply = pybie2d.kernels.high_level.laplace.Laplace_Layer_Apply
+    Laplace_Layer_Form = pybie2d.kernels.high_level.laplace.Laplace_Layer_Form
+    Stokes_Layer_Apply = pybie2d.kernels.high_level.stokes.Stokes_Layer_Apply
+    Stokes_Layer_Form = pybie2d.kernels.high_level.stokes.Stokes_Layer_Form
+    Stokes_Layer_Singular_Form = pybie2d.kernels.high_level.stokes.Stokes_Layer_Singular_Form
+    Singular_SLP = lambda src: Stokes_Layer_Singular_Form(src, ifforce=True)
+    Singular_DLP = lambda src: Stokes_Layer_Singular_Form(src, ifdipole=True)
+except:
+    from qfs.fallbacks.laplace import Laplace_Layer_Form
+    from qfs.fallbacks.stokes import Stokes_Layer_Form
 Naive_SLP = lambda src, trg: Stokes_Layer_Form(src, trg, ifforce=True)
 Naive_DLP = lambda src, trg: Stokes_Layer_Form(src, trg, ifdipole=True)
-Singular_SLP = lambda src: Stokes_Layer_Singular_Form(src, ifforce=True)
-Singular_DLP = lambda src: Stokes_Layer_Singular_Form(src, ifdipole=True)
 
 # End Setup Test
 ################################################################################

@@ -1,32 +1,58 @@
 import numpy as np
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-plt.ion()
-
-import pybie2d
-star = pybie2d.misc.curve_descriptions.star
-GSB = pybie2d.boundaries.global_smooth_boundary.global_smooth_boundary.Global_Smooth_Boundary
-PointSet = pybie2d.point_set.PointSet
-
 from qfs.stokes_qfs import Stokes_QFS
+
+try:
+    import pybie2d
+    PointSet = pybie2d.point_set.PointSet
+    GSB = pybie2d.boundaries.global_smooth_boundary.global_smooth_boundary.Global_Smooth_Boundary
+    star = pybie2d.misc.curve_descriptions.star
+except:
+    print('Running in fallback mode')
+    from qfs.fallbacks.boundaries import PointSet
+    from qfs.fallbacks.boundaries import Global_Smooth_Boundary as GSB
+    from qfs.fallbacks.curve_descriptions import star
+try:
+    from pyfmmlib2d import SFMM
+    def Full_Stokes_Layer_Apply(src, trg, f):
+        s = src.get_stacked_boundary()
+        t = trg.get_stacked_boundary()
+        out = SFMM(source=s, target=t, forces=f*src.weights, compute_target_velocity=True, compute_target_stress=True)
+        u = out['target']['u']
+        v = out['target']['v']
+        p = out['target']['p']
+        return u, v, p
+except:
+    raise Exception('Stokes examples not supported without pyfmmlib2d.')
 
 # estimated tolerance for integrals
 tol = 1e-14
 # number of points in boundary discretization
-n = 300
+n = 400
 # shell distance to test close eval at
 shell_distance = 0.1
 # see documentation for QFS
-shift_type = 1
+shift_type = 5
 # use singular eval or not
-singular = True
-# type of inverse to use ('LU', 'SVD', 'Circulant')
-s2c_type = 'Circulant'
-# Form, Apply, or Circulant
-b2c_type = 'Apply'
+singular = False
+# rectangular methods: 'QR', 'SVD'
+# square methods: 'LU', 'Square_QR', 'Square_SVD', 'Circulant'
+s2c_type = 'LU'
+# 'Form', 'Apply', or 'Circulant'
+b2c_type = 'Form'
+# source upsampling
+source_upsample_factor = 1.3
+# check upsampling
+check_upsample_factor = 1.6
+# problem (use circle, or star)
+use_circle = True
+
+use_circle = use_circle or s2c_type == 'Circulant' or b2c_type == 'Circulant'
 
 ################################################################################
 # Setup Test
+
+const_x = 1
+const_y = 2
 
 def solution_function(x, y, xc, yc, fx, fy):
     dx = x - xc
@@ -37,7 +63,7 @@ def solution_function(x, y, xc, yc, fx, fy):
     u = -fx*np.log(r) + fd*dx/r2
     v = -fy*np.log(r) + fd*dy/r2
     p = 2*fd / r2
-    return u, v, p
+    return u+const_x, v+const_y, p
 def solution_function_stress_jump(x, y, xc, yc, fx, fy, nx, ny):
     dx = x - xc
     dy = y - yc
@@ -61,30 +87,14 @@ def solution_function_stress_jump(x, y, xc, yc, fx, fy, nx, ny):
 # Generate options dictionary
 
 options = {
-    'tol'        : tol,
-    'shift_type' : shift_type,
     'b2c_type'   : b2c_type,
     's2c_type'   : s2c_type,
     'singular'   : singular,
 }
 
-############################################################################
-# Full Stokes Apply Function
-
-from pyfmmlib2d import SFMM
-def Full_Stokes_Layer_Apply(src, trg, f):
-    s = src.get_stacked_boundary()
-    t = trg.get_stacked_boundary()
-    out = SFMM(source=s, target=t, forces=f*src.weights, compute_target_velocity=True, compute_target_stress=True)
-    u = out['target']['u']
-    v = out['target']['v']
-    p = out['target']['p']
-    return u, v, p
-
 ################################################################################
 # Setup boundary
 
-use_circle = s2c_type == 'Circulant' or b2c_type == 'Circulant'
 bdy = GSB(c=star(n, f=5, a=0.0 if use_circle else 0.2))
 
 ################################################################################
@@ -125,7 +135,9 @@ for interior in [True, False]:
     ############################################################################
     # Setup qfs operators
 
-    qfs = Stokes_QFS(bdy, interior, True, True, options)
+    qfs = Stokes_QFS(bdy, interior, True, True, options, tol=tol,
+        shift_type=shift_type, source_upsample_factor=source_upsample_factor,
+        check_upsample_factor=check_upsample_factor)
 
     ############################################################################
     # Solve for effective density and extract effective sources
@@ -141,12 +153,12 @@ for interior in [True, False]:
     ua, va, pa = solution_function(bdy.x, bdy.y, xc, yc, fx, fy)
     UA = np.concatenate([ua, va])
     out = Full_Stokes_Layer_Apply(source, bdy, spot.reshape(2, source.N))
-    UE = np.concatenate([out[0], out[1]])
+    UE = np.concatenate([out[0] + const_x*(not interior), out[1] + const_y*(not interior)])
     err = np.abs(UE - UA).max()/scale
     perr = np.abs(out[2] - pa).max()/scale
     print('        On surface')
-    print('            velocity: {:0.2e}'.format(err))
-    print('            pressure: {:0.2e}'.format(perr))
+    print('            Error, velocity: {:0.2e}'.format(err))
+    print('            Error, pressure: {:0.2e}'.format(perr))
 
     ############################################################################
     # TEST ERROR IN U ON SHELLS
@@ -155,7 +167,7 @@ for interior in [True, False]:
     ua, va, pa = solution_function(shell.x, shell.y, xc, yc, fx, fy)
     UA = np.concatenate([ua, va])
     out = Full_Stokes_Layer_Apply(source, shell, spot.reshape(2, source.N))
-    UE = np.concatenate([out[0], out[1]])
+    UE = np.concatenate([out[0] + const_x*(not interior), out[1] + const_y*(not interior)])
     err = np.abs(UE - UA).max()/scale
     perr = np.abs(out[2] - pa).max()/scale
     print('        Off surface')
@@ -168,7 +180,7 @@ for interior in [True, False]:
     ua, va, pa = solution_function(far_targ.x, far_targ.y, xc, yc, fx, fy)
     UA = np.concatenate([ua, va])
     out = Full_Stokes_Layer_Apply(source, far_targ, spot.reshape(2, source.N))
-    UE = np.concatenate([out[0], out[1]])
+    UE = np.concatenate([out[0] + const_x*(not interior), out[1] + const_y*(not interior)])
     err = np.abs(UE - UA).max()/scale
     perr = np.abs(out[2] - pa).max()/scale
     print('        In the far field')

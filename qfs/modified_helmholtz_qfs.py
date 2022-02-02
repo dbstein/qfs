@@ -1,5 +1,4 @@
 import numpy as np
-import pybie2d
 
 from qfs._two_d_qfs import QFS, QFS_B2C
 from qfs._two_d_qfs import QFS_LU_Inverter, QFS_Circulant_Inverter
@@ -11,16 +10,20 @@ from qfs._two_d_qfs import QFS_s2c_factory
 
 ################################################################################
 # Setup Test
-
-Modified_Helmholtz_Layer_Apply = pybie2d.kernels.high_level.modified_helmholtz.Modified_Helmholtz_Layer_Apply
-Modified_Helmholtz_Layer_Form = pybie2d.kernels.high_level.modified_helmholtz.Modified_Helmholtz_Layer_Form
-Laplace_Layer_Singular_Form = pybie2d.kernels.high_level.laplace.Laplace_Layer_Singular_Form
-numba_k0 = pybie2d.misc.numba_special_functions.numba_k0
-numba_k1 = pybie2d.misc.numba_special_functions.numba_k1
-interpolate_to_p = pybie2d.misc.basic_functions.interpolate_to_p
-
-Naive_SLP = lambda src, trg: Modified_Helmholtz_Layer_Form(src, trg, ifcharge=True)
-Naive_DLP = lambda src, trg: Modified_Helmholtz_Layer_Form(src, trg, ifdipole=True)
+try:
+    import pybie2d
+    Modified_Helmholtz_Layer_Apply = pybie2d.kernels.high_level.modified_helmholtz.Modified_Helmholtz_Layer_Apply
+    Modified_Helmholtz_Layer_Form = pybie2d.kernels.high_level.modified_helmholtz.Modified_Helmholtz_Layer_Form
+    Laplace_Layer_Singular_Form = pybie2d.kernels.high_level.laplace.Laplace_Layer_Singular_Form
+    numba_k0 = pybie2d.misc.numba_special_functions.numba_k0
+    numba_k1 = pybie2d.misc.numba_special_functions.numba_k1
+    interpolate_to_p = pybie2d.misc.basic_functions.interpolate_to_p
+    Naive_SLP = lambda src, trg: Modified_Helmholtz_Layer_Form(src, trg, ifcharge=True)
+    Naive_DLP = lambda src, trg: Modified_Helmholtz_Layer_Form(src, trg, ifdipole=True)
+except:
+    import warnings
+    warnings.warn("Operating in fallback mode, only QFS-D with Form backend will work.")
+    from qfs.fallbacks.modified_helmholtz import Modified_Helmholtz_Layer_Form
 
 def Naive_SLP(k):
     def func(src, trg):

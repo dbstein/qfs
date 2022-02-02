@@ -1,5 +1,4 @@
 import numpy as np
-import pybie2d
 
 from qfs._two_d_qfs import QFS, QFS_B2C
 from qfs._two_d_qfs import QFS_LU_Inverter, QFS_Circulant_Inverter
@@ -12,15 +11,21 @@ from qfs._two_d_qfs import QFS_s2c_factory
 ################################################################################
 # Setup Test
 
-Laplace_Layer_Apply = pybie2d.kernels.high_level.laplace.Laplace_Layer_Apply
-Laplace_Layer_Form = pybie2d.kernels.high_level.laplace.Laplace_Layer_Form
-Laplace_Layer_Singular_Form = pybie2d.kernels.high_level.laplace.Laplace_Layer_Singular_Form
+try:
+    import pybie2d
+    Laplace_Layer_Apply = pybie2d.kernels.high_level.laplace.Laplace_Layer_Apply
+    Laplace_Layer_Form = pybie2d.kernels.high_level.laplace.Laplace_Layer_Form
+    Laplace_Layer_Singular_Form = pybie2d.kernels.high_level.laplace.Laplace_Layer_Singular_Form
+    Singular_SLP = lambda src: Laplace_Layer_Singular_Form(src, ifcharge=True)
+    Singular_DLP = lambda src: Laplace_Layer_Singular_Form(src, ifdipole=True)
+    IDLP = lambda src: Singular_DLP(src) - 0.5*np.eye(src.N)
+    EDLP = lambda src: Singular_DLP(src) + 0.5*np.eye(src.N)
+except:
+    import warnings
+    warnings.warn("Operating in fallback mode, only QFS-D with Form backend will work.")
+    from qfs.fallbacks.laplace import Laplace_Layer_Form
 Naive_SLP = lambda src, trg: Laplace_Layer_Form(src, trg, ifcharge=True)
 Naive_DLP = lambda src, trg: Laplace_Layer_Form(src, trg, ifdipole=True)
-Singular_SLP = lambda src: Laplace_Layer_Singular_Form(src, ifcharge=True)
-Singular_DLP = lambda src: Laplace_Layer_Singular_Form(src, ifdipole=True)
-IDLP = lambda src: Singular_DLP(src) - 0.5*np.eye(src.N)
-EDLP = lambda src: Singular_DLP(src) + 0.5*np.eye(src.N)
 
 # End Setup Test
 ################################################################################
