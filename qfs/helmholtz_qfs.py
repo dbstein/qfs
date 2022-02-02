@@ -143,6 +143,9 @@ class Helmholtz_QFS(QFS):
     def __init__(self, bdy, interior, slp, dlp, k, options=None, **kwargs):
         """
         Helmholtz QFS
+            Effective source representation is the Combined Field Rep, i.e.
+                -1j*k*SLP(src, trg, k) + DLP(src, trg, k)
+
         bdy (GlobalSmoothBoundary)
             boundary to do eval for
         interior (bool)

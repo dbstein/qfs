@@ -279,6 +279,9 @@ class Stokes_QFS(QFS_Pressure):
     def __init__(self, bdy, interior, slp, dlp, options=None, **kwargs):
         """
         Stokes QFS
+            Effective source representation is SLP, i.e.
+                SLP(src, trg)
+
         bdy (GlobalSmoothBoundary)
             boundary to do eval for
         interior (bool)

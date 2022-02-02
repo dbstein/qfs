@@ -1,7 +1,3 @@
-"""
-To become the replacement, eventually
-"""
-
 import numpy as np
 import scipy as sp
 import scipy.signal

@@ -154,6 +154,9 @@ class Laplace_QFS(QFS):
     def __init__(self, bdy, interior, slp, dlp, options=None, **kwargs):
         """
         Laplace QFS
+            Effective source representation is the Single Layer, i.e.
+                SLP(src, trg)
+
         bdy (GlobalSmoothBoundary)
             boundary to do eval for
         interior (bool)

@@ -24,3 +24,12 @@ For minimal operation, a fallback which removes the dependency on pybie2d is ava
 1. numpy
 2. scipy
 3. shapely
+
+## Simple Example
+Suppose you have an slp γ and a dlp σ that you'd like to evaluate to some targets on the interior of a boundary (some of which may be arbitrarily close, or even on, that boundary). We'll use the Laplace problem as an example. This is as easy as:
+```python
+qfs = Laplace_QFS(bdy, interior=True, slp=True, dlp=True)
+ζ = qfs([γ, σ])
+u_at_targ = Laplace_Layer_Apply(qfs.source, targ, charge=ζ) # naive quad!
+```
+Note that Laplace_QFS uses single-layer representation under the hood, so only charge needs to be included to eval the effective representation ζ.

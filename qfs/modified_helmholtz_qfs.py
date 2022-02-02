@@ -217,6 +217,9 @@ class Modified_Helmholtz_QFS(QFS):
     def __init__(self, bdy, interior, slp, dlp, k, options=None, **kwargs):
         """
         Modified Helmholtz QFS
+            Effective source representation is SLP, i.e.
+                SLP(src, trg, k)
+
         bdy (GlobalSmoothBoundary)
             boundary to do eval for
         interior (bool)
